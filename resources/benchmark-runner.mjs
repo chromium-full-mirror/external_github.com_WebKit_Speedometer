@@ -287,7 +287,20 @@ export class BenchmarkRunner {
         if (params.shuffleSeed !== "off")
             this._suiteOrderRandomNumberGenerator = seededHashRandomNumberGenerator(params.shuffleSeed);
         this._maybeForceGC = this._initForceGC();
+        this._useSignPost = !!globalThis.__signpostStart;
+    }
 
+    markStart(groupLabel, startLabel) {
+        performance.mark(startLabel);
+        if (this._useSignPost)
+            globalThis.__signpostStart(groupLabel);
+    }
+
+    markEnd(groupLabel, startLabel, endLabel) {
+        performance.mark(endLabel);
+        if (this._useSignPost)
+            globalThis.__signpostStop(groupLabel);
+        performance.measure(groupLabel, startLabel, endLabel);
     }
 
     _initForceGC() {
@@ -315,10 +328,10 @@ export class BenchmarkRunner {
         const iterationStartLabel = "iteration-start";
         const iterationEndLabel = "iteration-end";
         for (; this._currentIteration < this._iterationCount; this._currentIteration++) {
-            performance.mark(iterationStartLabel);
+            const iterationLabel = `iteration-${this._currentIteration}`;
+            this.markStart(iterationLabel, iterationStartLabel);
             await this._runAllSuites();
-            performance.mark(iterationEndLabel);
-            performance.measure(`iteration-${this._currentIteration}`, iterationStartLabel, iterationEndLabel);
+            this.markEnd(iterationLabel, iterationStartLabel, iterationEndLabel);
         }
         if (this._client?.didFinishLastIteration)
             await this._client.didFinishLastIteration(this._metrics);
@@ -360,10 +373,11 @@ export class BenchmarkRunner {
     async _runAllSuites() {
         this._measuredValues = { tests: {}, total: 0, mean: NaN, geomean: NaN, score: NaN };
 
+        const prepareLabel = "runner-prepare";
         const prepareStartLabel = "runner-prepare-start";
         const prepareEndLabel = "runner-prepare-end";
 
-        performance.mark(prepareStartLabel);
+        this.markStart(prepareLabel, prepareStartLabel);
         this._removeFrame();
         await this._appendFrame();
         this._page = new Page(this._frame);
@@ -379,40 +393,41 @@ export class BenchmarkRunner {
                 suites[j] = tmp;
             }
         }
-
-        performance.mark(prepareEndLabel);
-        performance.measure("runner-prepare", prepareStartLabel, prepareEndLabel);
+        this.markEnd(prepareLabel, prepareStartLabel, prepareEndLabel);
 
         for (const suite of suites) {
             if (!suite.disabled)
                 await this._runSuite(suite);
         }
 
+        const finalizeLabel = "runner-finalize";
         const finalizeStartLabel = "runner-finalize-start";
         const finalizeEndLabel = "runner-finalize-end";
 
-        performance.mark(finalizeStartLabel);
+        this.markStart(finalizeLabel, finalizeStartLabel);
         // Remove frame to clear the view for displaying the results.
         this._removeFrame();
         await this._finalize();
-        performance.mark(finalizeEndLabel);
-        performance.measure("runner-finalize", finalizeStartLabel, finalizeEndLabel);
+        this.markStart(finalizeLabel, finalizeStartLabel, finalizeEndLabel);
     }
 
     async _runSuite(suite) {
         this._prepareMetrics(suite);
+        const suitePrepareLabel = `suite-${suite.name}-prepare`;
         const suitePrepareStartLabel = `suite-${suite.name}-prepare-start`;
         const suitePrepareEndLabel = `suite-${suite.name}-prepare-end`;
+        const suiteLabel = `suite-${suite.name}`;
         const suiteStartLabel = `suite-${suite.name}-start`;
         const suiteEndLabel = `suite-${suite.name}-end`;
 
         await this._maybeForceGC();
-        performance.mark(suitePrepareStartLabel);
+
+        this.markStart(suitePrepareLabel, suitePrepareStartLabel);
         const prepareStartTime = performance.now();
         await this._prepareSuite(suite);
         const prepareEndTime = performance.now();
-        performance.mark(suitePrepareEndLabel);
-        performance.measure(`suite-${suite.name}-prepare`, suitePrepareStartLabel, suitePrepareEndLabel);
+        this.markEnd(suitePrepareLabel, suitePrepareStartLabel, suitePrepareEndLabel);
+
         await this._maybeForceGC();
 
         if (params.measurePrepare) {
@@ -420,11 +435,10 @@ export class BenchmarkRunner {
             this._recordPrepareMetric(suite, prepareTime);
         }
 
-        performance.mark(suiteStartLabel);
+        this.markStart(suiteLabel, suiteStartLabel);
         for (const test of suite.tests)
             await this._runTestAndRecordResults(suite, test);
-        performance.mark(suiteEndLabel);
-        performance.measure(`suite-${suite.name}`, suiteStartLabel, suiteEndLabel);
+        this.markStart(suiteLabel, suiteStartLabel, suiteEndLabel);
     }
 
     _prepareMetrics(suite) {
@@ -457,8 +471,10 @@ export class BenchmarkRunner {
             await this._client.willRunTest(suite, test);
 
         // Prepare all mark labels outside the measuring loop.
-        const startLabel = `${suite.name}.${test.name}-start`;
+        const syncLabel = `${suite.name}.${test.name}`;
+        const syncStartLabel = `${suite.name}.${test.name}-start`;
         const syncEndLabel = `${suite.name}.${test.name}-sync-end`;
+        const asyncLabel = `${suite.name}.${test.name}-async`;
         const asyncStartLabel = `${suite.name}.${test.name}-async-start`;
         const asyncEndLabel = `${suite.name}.${test.name}-async-end`;
 
@@ -467,22 +483,22 @@ export class BenchmarkRunner {
         let asyncTime;
         const runSync = () => {
             if (params.warmupBeforeSync) {
-                performance.mark("warmup-start");
+                this.markStart("warmup", "warmup-start");
                 const startTime = performance.now();
                 // Infinite loop for the specified ms.
                 while (performance.now() - startTime < params.warmupBeforeSync)
                     continue;
-                performance.mark("warmup-end");
+                this.markStart("warmup", "warmup-start", "warmup-end");
             }
-            performance.mark(startLabel);
+            this.markStart(syncLabel, syncStartLabel);
             const syncStartTime = performance.now();
             test.run(this._page);
             const syncEndTime = performance.now();
-            performance.mark(syncEndLabel);
+            this.markEnd(syncLabel, syncStartLabel, syncEndLabel);
 
             syncTime = syncEndTime - syncStartTime;
 
-            performance.mark(asyncStartLabel);
+            this.markStart(asyncLabel, asyncStartLabel);
             asyncStartTime = performance.now();
         };
         const measureAsync = () => {
@@ -492,11 +508,7 @@ export class BenchmarkRunner {
             const asyncEndTime = performance.now();
             asyncTime = asyncEndTime - asyncStartTime;
             this._frame.contentWindow._unusedHeightValue = height; // Prevent dead code elimination.
-            performance.mark(asyncEndLabel);
-            if (params.warmupBeforeSync)
-                performance.measure("warmup", "warmup-start", "warmup-end");
-            performance.measure(`${suite.name}.${test.name}-sync`, startLabel, syncEndLabel);
-            performance.measure(`${suite.name}.${test.name}-async`, asyncStartLabel, asyncEndLabel);
+            this.markEnd(asyncLabel, asyncStartLabel, asyncEndLabel);
         };
         const report = () => this._recordTestResults(suite, test, syncTime, asyncTime);
         const invokerClass = params.measurementMethod === "raf" ? RAFTestInvoker : TimerTestInvoker;
