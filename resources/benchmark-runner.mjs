@@ -22,6 +22,9 @@ function getParent(lookupStartNode, path) {
 class Page {
     constructor(frame) {
         this._frame = frame;
+        // Downstream-only. this._lookupStartNode is used by the React-Window workload to run the
+        // querySelector* methods on a child window.
+        this._lookupStartNode = null;
     }
 
     layout() {
@@ -58,7 +61,7 @@ class Page {
      * @returns PageElement | null
      */
     querySelector(selector, path = []) {
-        const lookupStartNode = this._frame.contentDocument;
+        const lookupStartNode = this._lookupStartNode ?? this._frame.contentDocument;
         const element = getParent(lookupStartNode, path).querySelector(selector);
 
         if (element === null)
@@ -82,7 +85,7 @@ class Page {
      * @returns array
      */
     querySelectorAll(selector, path = []) {
-        const lookupStartNode = this._frame.contentDocument;
+        const lookupStartNode = this._lookupStartNode ?? this._frame.contentDocument;
         const elements = Array.from(getParent(lookupStartNode, path).querySelectorAll(selector));
         for (let i = 0; i < elements.length; i++)
             elements[i] = this._wrapElement(elements[i]);
@@ -113,6 +116,24 @@ class Page {
 
     _wrapElement(element) {
         return new PageElement(element);
+    }
+
+    // Downstream only.
+    async targetChildWindow() {
+        return new Promise((resolve) => {
+            const resolveIfReady = () => {
+                // Expects the workload to set a global childWindow object.
+                const maybeChildWindow = this._frame.contentWindow.globalThis.childWindow;
+                let callback = resolveIfReady;
+                if (maybeChildWindow) {
+                    this._lookupStartNode = maybeChildWindow.document;
+                    resolve();
+                    return;
+                }
+                window.requestAnimationFrame(callback);
+            };
+            resolveIfReady();
+        });
     }
 }
 
@@ -339,6 +360,9 @@ export class BenchmarkRunner {
 
     _removeFrame() {
         if (this._frame) {
+            // Downstream only. The React-Window workload sets a global childWindow object.
+            if (this._frame.contentWindow.globalThis.childWindow)
+                this._frame.contentWindow.globalThis.childWindow.close();
             this._frame.parentNode.removeChild(this._frame);
             this._frame = null;
         }
