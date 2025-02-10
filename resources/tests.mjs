@@ -307,7 +307,7 @@ Suites.push({
 // Downstream only.
 Suites.push({
     name: "TodoMVC-React-Window",
-    url: "todomvc/architecture-examples/react-window/dist/index.html#/home",
+    url: "todomvc/architecture-examples/react/dist/index-window.html#/home",
     tags: ["todomvc"],
     disabled: true,
     async prepare(page) {
