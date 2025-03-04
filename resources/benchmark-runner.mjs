@@ -348,7 +348,10 @@ export class BenchmarkRunner {
 
     _removeFrame() {
         if (this._frame) {
-            this._frame.parentNode.removeChild(this._frame);
+            if (params.leakyIframes)
+                document.getElementById("leakedIframes").append(this._frame);
+            else
+                this._frame.parentNode.removeChild(this._frame);
             this._frame = null;
         }
     }

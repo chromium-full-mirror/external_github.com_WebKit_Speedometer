@@ -340,6 +340,10 @@ section > p {
     height: var(--viewport-height);
 }
 
+#leakedIframes {
+    display: none;
+}
+
 section#home p {
     margin: 0 auto;
     width: 70%;

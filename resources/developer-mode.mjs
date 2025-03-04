@@ -22,6 +22,7 @@ export function createDeveloperModeContainer() {
     settings.append(createUIForWarmupBeforeSync());
     settings.append(createUIForSyncStepDelay());
     settings.append(createUIForAsyncSteps());
+    settings.append(createUIForLeakyIframes());
 
     content.append(document.createElement("hr"));
     content.append(settings);
@@ -49,6 +50,12 @@ function createUIForWarmupSuite() {
 function createUIForAsyncSteps() {
     return createCheckboxUI("Use Async Steps", params.useAsyncSteps, (isChecked) => {
         params.useAsyncSteps = isChecked;
+    });
+}
+
+function createUIForLeakyIframes() {
+    return createCheckboxUI("Leak IFrames", params.leakyIframes, (isChecked) => {
+        params.leakyIframes = isChecked;
     });
 }
 
