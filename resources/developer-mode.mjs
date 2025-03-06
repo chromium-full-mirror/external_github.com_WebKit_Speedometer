@@ -271,7 +271,7 @@ function updateURL() {
         }
     }
 
-    const defaultParamKeys = ["iterationCount", "useWarmupSuite", "warmupBeforeSync", "waitBeforeSync", "useAsyncSteps"];
+    const defaultParamKeys = ["iterationCount", "useWarmupSuite", "warmupBeforeSync", "waitBeforeSync", "useAsyncSteps", "leakyIframes"];
     for (const paramKey of defaultParamKeys) {
         if (params[paramKey] !== defaultParams[paramKey])
             url.searchParams.set(paramKey, params[paramKey]);
