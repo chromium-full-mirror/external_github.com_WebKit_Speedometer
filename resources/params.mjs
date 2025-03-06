@@ -25,6 +25,8 @@ class Params {
     // "generate": generate a random seed
     // <integer>: use the provided integer as a seed
     shuffleSeed = "off";
+    // Leak iframes to DevTools can display sources.
+    leakyIframes = false;
 
     constructor(searchParams = undefined) {
         if (searchParams)
@@ -120,6 +122,11 @@ class Params {
                     throw new Error(`Invalid shuffle seed: '${this.shuffleSeed}', must be either 'off', 'generate' or an integer.`);
             }
             searchParams.delete("shuffleSeed");
+        }
+
+        if (searchParams.has("leakyIframes")) {
+            this.leakyIframes = true;
+            searchParams.delete("leakyIframes");
         }
 
         const unused = Array.from(searchParams.keys());
