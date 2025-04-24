@@ -23,8 +23,10 @@ export function createDeveloperModeContainer() {
     settings.append(createUIForWarmupBeforeSync());
     settings.append(createUIForSyncStepDelay());
     settings.append(createUIForLeakyIframes());
+    settings.append(createUIForMeasurePrepare());
+    settings.append(createUIForDomainPerIteration());
+    settings.append(createUIForForceGC());
 
-    content.append(document.createElement("hr"));
     content.append(settings);
 
     content.append(document.createElement("hr"));
@@ -88,6 +90,57 @@ function createUIForWarmupSuite() {
 
     let label = document.createElement("label");
     label.append(check, " ", span("Use Warmup Suite"));
+
+    return label;
+}
+
+function createUIForMeasurePrepare() {
+    let check = document.createElement("input");
+    check.type = "checkbox";
+    check.id = "measure-prepare";
+    check.checked = params.measurePrepare;
+
+    check.onchange = () => {
+        params.measurePrepare = check.checked;
+        updateURL();
+    };
+
+    let label = document.createElement("label");
+    label.append(check, " ", "Measure Prepare");
+
+    return label;
+}
+
+function createUIForDomainPerIteration() {
+    let check = document.createElement("input");
+    check.type = "checkbox";
+    check.id = "domain-per-iteration";
+    check.checked = params.domainPerIteration;
+
+    check.onchange = () => {
+        params.domainPerIteration = check.checked;
+        updateURL();
+    };
+
+    let label = document.createElement("label");
+    label.append(check, " ", "Use Subdomain-Runner");
+
+    return label;
+}
+
+function createUIForForceGC() {
+    let check = document.createElement("input");
+    check.type = "checkbox";
+    check.id = "suite-force-gc";
+    check.checked = params.suiteForceGC;
+
+    check.onchange = () => {
+        params.suiteForceGC = check.checked;
+        updateURL();
+    };
+
+    let label = document.createElement("label");
+    label.append(check, " ", "Force GC before every Suite");
 
     return label;
 }
@@ -291,13 +344,18 @@ function updateURL() {
     else
         url.searchParams.delete("measurementMethod");
 
-    const boolParamKeys = ["iterationCount", "useWarmupSuite", "warmupBeforeSync", "waitBeforeSync", "leakyIframes"];
+    const boolParamKeys = ["iterationCount", "useWarmupSuite", "warmupBeforeSync", "waitBeforeSync", "domainPerIteration", "suiteForceGC", "leakyIframes"];
     for (const paramKey of boolParamKeys) {
         if (params[paramKey] !== defaultParams[paramKey])
             url.searchParams.set(paramKey, params[paramKey]);
         else
             url.searchParams.delete(paramKey);
     }
+
+    if (params.measurePrepare !== defaultParams.measurePrepare)
+        url.searchParams.set("measurePrepare", params.measurePrepare);
+    else
+        url.searchParams.delete("measurePrepare");
 
     // Only push state if changed
     url.search = decodeURIComponent(url.search);

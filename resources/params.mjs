@@ -1,4 +1,4 @@
-class Params {
+export class Params {
     viewport = {
         width: 800,
         height: 600,
@@ -27,11 +27,19 @@ class Params {
     shuffleSeed = "off";
     // Leak iframes to DevTools can display sources.
     leakyIframes = false;
+    // Emit metrics for the prepare phase.
+    measurePrepare = false;
+    // Use a new subdomain for each iteration to avoid caching.
+    domainPerIteration = false;
+    // Force a gc before every suite (chrome specific)
+    suiteForceGC = false;
+    currentIteration = 0;
+    embedded = false;
 
-    constructor(searchParams = undefined) {
+    constructor(searchParams = undefined, freeze = true) {
         if (searchParams)
             this._copyFromSearchParams(searchParams);
-        if (!this.developerMode) {
+        if (!this.developerMode && freeze) {
             Object.freeze(this.viewport);
             Object.freeze(this);
         }
@@ -65,23 +73,43 @@ class Params {
         if (searchParams.has("suite") || searchParams.has("suites")) {
             if (searchParams.has("suite") && searchParams.has("suites"))
                 throw new Error("Params 'suite' and 'suites' can not be used together.");
-            const value = searchParams.get("suite") || searchParams.get("suites");
-            this.suites = value.split(",");
-            if (this.suites.length === 0)
-                throw new Error("No suites selected");
+            const value = (searchParams.get("suite") || searchParams.get("suites")).trim();
+            if (value.length ) {
+                this.suites = value.split(",");
+                if (this.suites.length === 0)
+                    throw new Error("No suites selected");
+            }
             searchParams.delete("suite");
             searchParams.delete("suites");
         }
 
         if (searchParams.has("tags")) {
-            if (this.suites.length)
-                throw new Error("'suites' and 'tags' cannot be used together.");
-            this.tags = searchParams.get("tags").split(",");
+            const rawTags = searchParams.get("tags");
+            if (rawTags) {
+                this.tags = rawTags.split(",");
+                if (this.tags.length && this.suites.length)
+                    throw new Error("'suites' and 'tags' cannot be used together.");
+            }
             searchParams.delete("tags");
         }
 
+        this.embedded = searchParams.has("embedded");
+        searchParams.delete("embedded");
+
         this.developerMode = searchParams.has("developerMode");
         searchParams.delete("developerMode");
+
+        this.measurePrepare = searchParams.has("measurePrepare");
+        searchParams.delete("measurePrepare");
+
+        this.domainPerIteration = searchParams.has("domainPerIteration");
+        searchParams.delete("domainPerIteration");
+
+        this.suiteForceGC = searchParams.has("suiteForceGC");
+        searchParams.delete("suiteForceGC");
+
+        this.currentIteration = searchParams.get("currentIteration") | 0;
+        searchParams.delete("currentIteration");
 
         if (searchParams.has("useWarmupSuite")) {
             this.useWarmupSuite = true;
@@ -134,10 +162,26 @@ class Params {
             console.error("Got unused search params", unused);
     }
 
+    toSearchParamsObject() {
+        const rawParams = { __proto__: null };
+        for (const [key, value] of Object.entries(this)) {
+            if (value === defaultParams[key])
+                continue;
+            rawParams[key] = value;
+        }
+        // Either suites or params can be used at the same time.
+        if (rawParams.suites?.length && rawParams.tags?.length)
+            delete rawParams.suites;
+        rawParams.viewport = `${this.viewport.width}x${this.viewport.height}`;
+        return new URLSearchParams(rawParams);
+    }
+
     toSearchParams() {
-        const rawParams = { ...this };
-        rawParams["viewport"] = `${this.viewport.width}x${this.viewport.height}`;
-        return new URLSearchParams(rawParams).toString();
+        return this.toSearchParamsObject().toString();
+    }
+
+    copy() {
+        return new Params(this.toSearchParamsObject(), false);
     }
 }
 
@@ -152,3 +196,4 @@ try {
     alert(`Invalid URL Param: ${e}`);
 }
 export const params = maybeCustomParams;
+globalThis.params = maybeCustomParams;

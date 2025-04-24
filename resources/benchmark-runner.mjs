@@ -22,6 +22,9 @@ function getParent(lookupStartNode, path) {
 class Page {
     constructor(frame) {
         this._frame = frame;
+        // Downstream-only. this._lookupStartNode is used by the React-Window workload to run the
+        // querySelector* methods on a child window.
+        this._lookupStartNode = null;
     }
 
     layout() {
@@ -58,7 +61,7 @@ class Page {
      * @returns PageElement | null
      */
     querySelector(selector, path = []) {
-        const lookupStartNode = this._frame.contentDocument;
+        const lookupStartNode = this._lookupStartNode ?? this._frame.contentDocument;
         const element = getParent(lookupStartNode, path).querySelector(selector);
 
         if (element === null)
@@ -82,7 +85,7 @@ class Page {
      * @returns array
      */
     querySelectorAll(selector, path = []) {
-        const lookupStartNode = this._frame.contentDocument;
+        const lookupStartNode = this._lookupStartNode ?? this._frame.contentDocument;
         const elements = Array.from(getParent(lookupStartNode, path).querySelectorAll(selector));
         for (let i = 0; i < elements.length; i++)
             elements[i] = this._wrapElement(elements[i]);
@@ -113,6 +116,24 @@ class Page {
 
     _wrapElement(element) {
         return new PageElement(element);
+    }
+
+    // Downstream only.
+    async targetChildWindow() {
+        return new Promise((resolve) => {
+            const resolveIfReady = () => {
+                // Expects the workload to set a global childWindow object.
+                const maybeChildWindow = this._frame.contentWindow.globalThis.childWindow;
+                let callback = resolveIfReady;
+                if (maybeChildWindow) {
+                    this._lookupStartNode = maybeChildWindow.document;
+                    resolve();
+                    return;
+                }
+                window.requestAnimationFrame(callback);
+            };
+            resolveIfReady();
+        });
     }
 }
 
@@ -218,9 +239,10 @@ function geomeanToScore(geomean) {
 // The WarmupSuite is used to make sure all runner helper functions and
 // classes are compiled, to avoid unnecessary pauses due to delayed
 // compilation of runner methods in the middle of the measuring cycle.
-const WarmupSuite = {
+export const WarmupSuite = {
     name: "Warmup",
     url: "warmup/index.html",
+    disabled: false,
     async prepare(page) {
         await page.waitForElement("#testItem");
     },
@@ -355,15 +377,48 @@ export class BenchmarkRunner {
         this._page = null;
         this._metrics = null;
         this._iterationCount = params.iterationCount;
+        this._currentIteration = 0;
         if (params.shuffleSeed !== "off")
             this._suiteOrderRandomNumberGenerator = seededHashRandomNumberGenerator(params.shuffleSeed);
         this._wakeLock = new WakeLock();
+        this._maybeForceGC = this._initForceGC();
+        this._useSignPost = !!globalThis.__signpostStart;
+    }
+
+    markStart(groupLabel, startLabel) {
+        performance.mark(startLabel);
+        if (this._useSignPost)
+            globalThis.__signpostStart(groupLabel);
+    }
+
+    markEnd(groupLabel, startLabel, endLabel) {
+        performance.mark(endLabel);
+        if (this._useSignPost)
+            globalThis.__signpostStop(groupLabel);
+        performance.measure(groupLabel, startLabel, endLabel);
+    }
+
+    _initForceGC() {
+        if (!params.suiteForceGC)
+            return () => {};
+        try {
+            let gc_extension = eval("gc");
+            return () => gc_extension({ type: "major", execution: "async" });
+        } catch (e) {
+            console.error("suiteForceGC was enabled but --expose-gc was not set", e);
+        }
+        return () => {};
+    }
+
+    get currentIteration() {
+        return this._currentIteration;
     }
 
     async runMultipleIterations(iterationCount) {
         this._iterationCount = iterationCount;
+        this._currentIteration = 0;
         if (this._client?.willStartFirstIteration)
-            await this._client.willStartFirstIteration(iterationCount);
+            await this._client.willStartFirstIteration( this._iterationCount);
 
         try {
             await this._runMultipleIterations();
@@ -382,25 +437,29 @@ export class BenchmarkRunner {
     async _runMultipleIterations() {
         const iterationStartLabel = "iteration-start";
         const iterationEndLabel = "iteration-end";
-        for (let i = 0; i < this._iterationCount; i++) {
-            performance.mark(iterationStartLabel);
+        for (; this._currentIteration < this._iterationCount; this._currentIteration++) {
+            const iterationLabel = `iteration-${this._currentIteration}`;
+            this.markStart(iterationLabel, iterationStartLabel);
             await this._runAllSuites();
-            performance.mark(iterationEndLabel);
-            performance.measure(`iteration-${i}`, iterationStartLabel, iterationEndLabel);
+            this.markEnd(iterationLabel, iterationStartLabel, iterationEndLabel);
         }
     }
 
     _removeFrame() {
         if (this._frame) {
-            if (params.leakyIframes)
+            if (params.leakyIframes) {
                 document.getElementById("leakedIframes").append(this._frame);
-            else
+            } else {
+                // Downstream only. The React-Window workload sets a global childWindow object.
+                if (this._frame.contentWindow.globalThis.childWindow)
+                    this._frame.contentWindow.globalThis.childWindow.close();
                 this._frame.parentNode.removeChild(this._frame);
+            }
             this._frame = null;
         }
     }
 
-    async _appendFrame(src) {
+    async _appendFrame() {
         const frame = document.createElement("iframe");
         const style = frame.style;
         style.width = `${params.viewport.width}px`;
@@ -409,9 +468,14 @@ export class BenchmarkRunner {
         style.position = "absolute";
         frame.setAttribute("scrolling", "no");
         frame.className = "test-runner";
-        style.left = "50%";
-        style.top = "50%";
-        style.transform = "translate(-50%, -50%)";
+        if (params.embedded) {
+            style.left = "0px";
+            style.top = "0px";
+        } else {
+            style.left = "50%";
+            style.top = "50%";
+            style.transform = "translate(-50%, -50%)";
+        }
 
         if (this._client?.willAddTestFrame)
             await this._client.willAddTestFrame(frame);
@@ -425,10 +489,11 @@ export class BenchmarkRunner {
         this._measuredValues = { tests: {}, total: 0, mean: NaN, geomean: NaN, score: NaN };
         await this._wakeLock.request();
 
+        const prepareLabel = "runner-prepare";
         const prepareStartLabel = "runner-prepare-start";
         const prepareEndLabel = "runner-prepare-end";
 
-        performance.mark(prepareStartLabel);
+        this.markStart(prepareLabel, prepareStartLabel);
         this._removeFrame();
         await this._appendFrame();
         this._page = new Page(this._frame);
@@ -444,8 +509,7 @@ export class BenchmarkRunner {
                 suites[j] = tmp;
             }
         }
-        performance.mark(prepareEndLabel);
-        performance.measure("runner-prepare", prepareStartLabel, prepareEndLabel);
+        this.markEnd(prepareLabel, prepareStartLabel, prepareEndLabel);
 
         try {
             for (const suite of suites) {
@@ -459,46 +523,53 @@ export class BenchmarkRunner {
     }
 
     async _finishRunAllSuites() {
+        const finalizeLabel = "runner-finalize";
         const finalizeStartLabel = "runner-finalize-start";
         const finalizeEndLabel = "runner-finalize-end";
 
-        performance.mark(finalizeStartLabel);
+        this.markStart(finalizeLabel, finalizeStartLabel);
         // Remove frame to clear the view for displaying the results.
         this._removeFrame();
         await this._finalize();
-        performance.mark(finalizeEndLabel);
-        performance.measure("runner-finalize", finalizeStartLabel, finalizeEndLabel);
+        this.markEnd(finalizeLabel, finalizeStartLabel, finalizeEndLabel);
         await this._wakeLock.release();
     }
 
     async _runSuite(suite) {
-        const suiteName = suite.name;
-        const suitePrepareStartLabel = `suite-${suiteName}-prepare-start`;
-        const suitePrepareEndLabel = `suite-${suiteName}-prepare-end`;
-        const suiteStartLabel = `suite-${suiteName}-start`;
-        const suiteEndLabel = `suite-${suiteName}-end`;
+        this._prepareMetrics(suite);
+        const suitePrepareLabel = `suite-${suite.name}-prepare`;
+        const suitePrepareStartLabel = `suite-${suite.name}-prepare-start`;
+        const suitePrepareEndLabel = `suite-${suite.name}-prepare-end`;
+        const suiteLabel = `suite-${suite.name}`;
+        const suiteStartLabel = `suite-${suite.name}-start`;
+        const suiteEndLabel = `suite-${suite.name}-end`;
 
-        performance.mark(suitePrepareStartLabel);
+        await this._maybeForceGC();
+
+        this.markStart(suitePrepareLabel, suitePrepareStartLabel);
+        const prepareStartTime = performance.now();
         await this._prepareSuite(suite);
-        performance.mark(suitePrepareEndLabel);
+        const prepareEndTime = performance.now();
+        this.markEnd(suitePrepareLabel, suitePrepareStartLabel, suitePrepareEndLabel);
 
-        performance.mark(suiteStartLabel);
+        await this._maybeForceGC();
+
+        if (params.measurePrepare) {
+            const prepareTime = prepareEndTime - prepareStartTime;
+            this._recordPrepareMetric(suite, prepareTime);
+        }
+
+        this.markStart(suiteLabel, suiteStartLabel);
         for (const test of suite.tests)
             await this._runTestAndRecordResults(suite, test);
-        performance.mark(suiteEndLabel);
-
-        performance.measure(`suite-${suiteName}-prepare`, suitePrepareStartLabel, suitePrepareEndLabel);
-        performance.measure(`suite-${suiteName}`, suiteStartLabel, suiteEndLabel);
-        this._validateSuiteTotal(suiteName);
+        this.markEnd(suiteLabel, suiteStartLabel, suiteEndLabel);
     }
 
-    _validateSuiteTotal(suiteName) {
-        // When the test is fast and the precision is low (for example with Firefox'
-        // privacy.resistFingerprinting preference), it's possible that the measured
-        // total duration for an entire is 0.
-        const suiteTotal = this._measuredValues.tests[suiteName].total;
-        if (suiteTotal === 0)
-            throw new Error(`Got invalid 0-time total for suite ${suiteName}: ${suiteTotal}`);
+    _prepareMetrics(suite) {
+        this._measuredValues.tests[suite.name] = {
+            tests: {},
+            total: 0,
+        };
     }
 
     async _prepareSuite(suite) {
@@ -512,14 +583,22 @@ export class BenchmarkRunner {
         });
     }
 
+    _recordPrepareMetric(suite, prepareTime) {
+        const suiteResults = this._measuredValues.tests[suite.name];
+        suiteResults.tests.Prepare = prepareTime;
+        suiteResults.total += prepareTime;
+    }
+
     async _runTestAndRecordResults(suite, test) {
         /* eslint-disable-next-line no-async-promise-executor */
         if (this._client?.willRunTest)
             await this._client.willRunTest(suite, test);
 
         // Prepare all mark labels outside the measuring loop.
-        const startLabel = `${suite.name}.${test.name}-start`;
+        const syncLabel = `${suite.name}.${test.name}`;
+        const syncStartLabel = `${suite.name}.${test.name}-start`;
         const syncEndLabel = `${suite.name}.${test.name}-sync-end`;
+        const asyncLabel = `${suite.name}.${test.name}-async`;
         const asyncStartLabel = `${suite.name}.${test.name}-async-start`;
         const asyncEndLabel = `${suite.name}.${test.name}-async-end`;
 
@@ -528,22 +607,22 @@ export class BenchmarkRunner {
         let asyncTime;
         const runSync = () => {
             if (params.warmupBeforeSync) {
-                performance.mark("warmup-start");
+                this.markStart("warmup", "warmup-start");
                 const startTime = performance.now();
                 // Infinite loop for the specified ms.
                 while (performance.now() - startTime < params.warmupBeforeSync)
                     continue;
-                performance.mark("warmup-end");
+                this.markEnd("warmup", "warmup-start", "warmup-end");
             }
-            performance.mark(startLabel);
+            this.markStart(syncLabel, syncStartLabel);
             const syncStartTime = performance.now();
             test.run(this._page);
             const syncEndTime = performance.now();
-            performance.mark(syncEndLabel);
+            this.markEnd(syncLabel, syncStartLabel, syncEndLabel);
 
             syncTime = syncEndTime - syncStartTime;
 
-            performance.mark(asyncStartLabel);
+            this.markStart(asyncLabel, asyncStartLabel);
             asyncStartTime = performance.now();
         };
         const measureAsync = () => {
@@ -553,11 +632,7 @@ export class BenchmarkRunner {
             const asyncEndTime = performance.now();
             asyncTime = asyncEndTime - asyncStartTime;
             this._frame.contentWindow._unusedHeightValue = height; // Prevent dead code elimination.
-            performance.mark(asyncEndLabel);
-            if (params.warmupBeforeSync)
-                performance.measure("warmup", "warmup-start", "warmup-end");
-            performance.measure(`${suite.name}.${test.name}-sync`, startLabel, syncEndLabel);
-            performance.measure(`${suite.name}.${test.name}-async`, asyncStartLabel, asyncEndLabel);
+            this.markEnd(asyncLabel, asyncStartLabel, asyncEndLabel);
         };
         const report = () => this._recordTestResults(suite, test, syncTime, asyncTime);
         const invokerClass = params.measurementMethod === "raf" ? RAFTestInvoker : TimerTestInvoker;
@@ -568,13 +643,18 @@ export class BenchmarkRunner {
 
     async _recordTestResults(suite, test, syncTime, asyncTime) {
         // Skip reporting updates for the warmup suite.
-        if (suite === WarmupSuite)
+        if (suite.name === "Warmup")
             return;
 
-        const suiteResults = this._measuredValues.tests[suite.name] || { tests: {}, total: 0 };
+        const suiteResults = this._measuredValues.tests[suite.name];
         const total = syncTime + asyncTime;
-        this._measuredValues.tests[suite.name] = suiteResults;
-        suiteResults.tests[test.name] = { tests: { Sync: syncTime, Async: asyncTime }, total: total };
+        suiteResults.tests[test.name] = {
+            tests: {
+                Sync: syncTime,
+                Async: asyncTime,
+            },
+            total: total
+        };
         suiteResults.total += total;
 
         if (this._client?.didRunTest)
@@ -611,16 +691,24 @@ export class BenchmarkRunner {
                 throw new Error(`Requested iteration=${i} does not exist.`);
             return getMetric(`Iteration-${i}-Total`);
         };
+        const aggregates = Object.create(null);
 
         const collectSubMetrics = (prefix, items, parent) => {
             for (let name in items) {
                 const results = items[name];
                 const metric = getMetric(prefix + name);
-                metric.add(results.total ?? results);
+                const value = results.total ?? results;
+                metric.add(value);
                 if (metric.parent !== parent)
                     parent.addChild(metric);
-                if (results.tests)
+                if (results.tests) {
                     collectSubMetrics(`${metric.name}${Metric.separator}`, results.tests, metric);
+                } else {
+                    let aggregate = aggregates[name];
+                    if (!aggregate)
+                        aggregate = aggregates[name] = new Metric(name);
+                    aggregate.add(value);
+                }
             }
         };
         const initializeMetrics = this._metrics === null;
@@ -643,11 +731,157 @@ export class BenchmarkRunner {
         const iterationTotal = iterationTotalMetric(geomean.length);
         for (const results of Object.values(iterationResults))
             iterationTotal.add(results.total);
+        for (let aggregate of Object.values(aggregates)) {
+            aggregate.computeAggregatedMetrics();
+            getMetric(aggregate.name).add(aggregate.geomean);
+        }
         iterationTotal.computeAggregatedMetrics();
         geomean.add(iterationTotal.geomean);
         getMetric("Score").add(geomeanToScore(iterationTotal.geomean));
 
         for (const metric of Object.values(this._metrics))
             metric.computeAggregatedMetrics();
+    }
+}
+
+class PingBackDone {}
+const DONE = new PingBackDone();
+
+class PostMessageRunner extends BenchmarkRunner {
+    _postMessageHandlers = { __proto__: null };
+
+    constructor(suites, client) {
+        super(suites, client);
+        globalThis.addEventListener("message", this.onMessage.bind(this));
+    }
+
+    onMessage(event) {
+        const { cmd, data = undefined } = event.data;
+        const resolver = this._postMessageHandlers[cmd];
+        if (!resolver)
+            throw Error(`Unknown onMessage: ${cmd}`);
+        if (resolver === DONE)
+            throw Error(`Cannot evaluate ping back resolver twice: ${cmd}`);
+        this._postMessageHandlers[cmd] = DONE;
+        resolver(data);
+    }
+
+    async pingBackMessage(name) {
+        if (this._postMessageHandlers[name] !== DONE)
+            throw Error(`Unknown ping back message: ${name}`);
+        return new Promise(resolver => {
+            this._postMessageHandlers[name] = resolver;
+        });
+    }
+}
+
+export class SubdomainBenchmarkRunner extends PostMessageRunner {
+
+    _finishPromise;
+    _postMessageHandlers = {
+        __proto__: null,
+        prepareDone: DONE,
+        recordPrepareMetric: DONE,
+        recordTestResults: DONE,
+    };
+
+    // Assume all workloads report the metrics back via postMessage.
+    async _runSuite(suite) {
+        this._prepareMetrics(suite);
+        await this._prepareSuite(suite);
+        if (params.measurePrepare) {
+            const { prepareTime } = await this.pingBackMessage("recordPrepareMetric");
+            this._recordPrepareMetric(suite, prepareTime);
+        }
+        for (const test of suite.tests)
+            await this._runTestAndRecordResults(suite, test);
+    }
+
+    async _runTestAndRecordResults(suite, test) {
+        this.postMessage("runTestAndRecordResults");
+        const { syncTime, asyncTime } = await this.pingBackMessage("recordTestResults");
+        await this._recordTestResults(suite, test, syncTime, asyncTime);
+    }
+
+    postMessage(cmd, data) {
+        this._frame.contentWindow.postMessage({ cmd, data }, "*");
+    }
+
+    async _prepareSuite(suite) {
+        await new Promise((resolve) => {
+            const frame = this._page._frame;
+            frame.onload = async () => resolve();
+            const url = new URL(window.location.href);
+            const customParams = params.copy();
+            customParams.embedded = true;
+            customParams.suites = [suite.name];
+            customParams.tags = [];
+            customParams.startAutomatically = true;
+            customParams.developerMode = false;
+            customParams.iterationCount = 1;
+            // TODO: handle local test URLs better
+            if (this._isLocalUrl(url)) {
+                url.port = parseInt(url.port) + this._currentIteration;
+            } else {
+                // Input:  foo-bar.custom.domain.com,   foo-bar-0.custom.domain.com
+                // Output: foo-bar-1.custom.domain.com, foo-bar-1.custom.domain.com
+                const hostParts = url.hostname.split(".");
+                const domainWithoutIndex = hostParts[0].match(DOMAIN_WITHOUT_INDEX_RE).groups.nonIndexed;
+                hostParts[0] = `${domainWithoutIndex}-${this.currentIteration}`;
+                url.host = hostParts.join(".");
+            }
+            url.search = customParams.toSearchParams();
+            frame.src = url.toString();
+        });
+        await this.pingBackMessage("prepareDone");
+        this.postMessage("startSuite");
+    }
+
+    _isLocalUrl(url) {
+        return url.hostname === "127.0.0.1" || url.hostname === "localhost";
+    }
+}
+
+const DOMAIN_WITHOUT_INDEX_RE = /(?<nonIndexed>([^-]+(-[^0-9])?)+)(-[0-9]+)?/;
+
+export class EmbeddedBenchmarkRunner extends PostMessageRunner {
+
+    _postMessageHandlers = {
+        __proto__: null,
+        startSuite: DONE,
+        runTestAndRecordResults: DONE,
+    };
+
+    constructor(suites, client) {
+        super(suites, client);
+        if (globalThis === globalThis.parent) {
+            const msg = "Cannot use embedded runner in toplevel iframe";
+            alert(msg);
+            throw Error(msg);
+        }
+    }
+
+    postMessage(cmd, data) {
+        globalThis.parent.postMessage({ cmd, data }, "*");
+    }
+
+    async _prepareSuite(suite) {
+        await super._prepareSuite(suite);
+        this.postMessage("prepareDone", { prepareTime: 0 });
+        await this.pingBackMessage("startSuite");
+    }
+
+    async _runTestAndRecordResults(suite, test) {
+        await this.pingBackMessage("runTestAndRecordResults");
+        return super._runTestAndRecordResults(suite, test);
+    }
+
+    _recordPrepareMetric(suite, prepareTime) {
+        super._recordPrepareMetric(suite, prepareTime);
+        this.postMessage("recordPrepareMetric", { prepareTime });
+    }
+
+    async _recordTestResults(suite, test, syncTime, asyncTime) {
+        this.postMessage("recordTestResults", { syncTime, asyncTime });
     }
 }

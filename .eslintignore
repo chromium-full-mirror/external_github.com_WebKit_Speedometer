@@ -23,6 +23,8 @@ package-lock.json
 !/resources/todomvc/architecture-examples/vue
 !/resources/todomvc/architecture-examples/vue-complex
 
+/resources/todomvc/architecture-examples/react/public/window/*
+
 /resources/todomvc/vanilla-examples/*
 !/resources/todomvc/vanilla-examples/javascript-es5
 !/resources/todomvc/vanilla-examples/javascript-es5-complex
