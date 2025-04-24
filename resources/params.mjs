@@ -33,6 +33,8 @@ export class Params {
     suiteForceGC = false;
     currentIteration = 0;
     embedded = false;
+    // Leak iframes to DevTools can display sources.
+    leakyIframes = false;
 
 
     constructor(searchParams = undefined, freeze = true) {
@@ -149,6 +151,11 @@ export class Params {
                     throw new Error(`Invalid shuffle seed: '${this.shuffleSeed}', must be either 'off', 'generate' or an integer.`);
             }
             searchParams.delete("shuffleSeed");
+        }
+
+        if (searchParams.has("leakyIframes")) {
+            this.leakyIframes = true;
+            searchParams.delete("leakyIframes");
         }
 
         const unused = Array.from(searchParams.keys());

@@ -360,10 +360,14 @@ export class BenchmarkRunner {
 
     _removeFrame() {
         if (this._frame) {
-            // Downstream only. The React-Window workload sets a global childWindow object.
-            if (this._frame.contentWindow.globalThis.childWindow)
-                this._frame.contentWindow.globalThis.childWindow.close();
-            this._frame.parentNode.removeChild(this._frame);
+            if (params.leakyIframes) {
+                document.getElementById("leakedIframes").append(this._frame);
+            } else {
+                // Downstream only. The React-Window workload sets a global childWindow object.
+                if (this._frame.contentWindow.globalThis.childWindow)
+                    this._frame.contentWindow.globalThis.childWindow.close();
+                this._frame.parentNode.removeChild(this._frame);
+            }
             this._frame = null;
         }
     }
@@ -432,7 +436,7 @@ export class BenchmarkRunner {
         // Remove frame to clear the view for displaying the results.
         this._removeFrame();
         await this._finalize();
-        this.markStart(finalizeLabel, finalizeStartLabel, finalizeEndLabel);
+        this.markEnd(finalizeLabel, finalizeStartLabel, finalizeEndLabel);
     }
 
     async _runSuite(suite) {
@@ -462,7 +466,7 @@ export class BenchmarkRunner {
         this.markStart(suiteLabel, suiteStartLabel);
         for (const test of suite.tests)
             await this._runTestAndRecordResults(suite, test);
-        this.markStart(suiteLabel, suiteStartLabel, suiteEndLabel);
+        this.markEnd(suiteLabel, suiteStartLabel, suiteEndLabel);
     }
 
     _prepareMetrics(suite) {
@@ -512,7 +516,7 @@ export class BenchmarkRunner {
                 // Infinite loop for the specified ms.
                 while (performance.now() - startTime < params.warmupBeforeSync)
                     continue;
-                this.markStart("warmup", "warmup-start", "warmup-end");
+                this.markEnd("warmup", "warmup-start", "warmup-end");
             }
             this.markStart(syncLabel, syncStartLabel);
             const syncStartTime = performance.now();

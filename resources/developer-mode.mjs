@@ -25,6 +25,7 @@ export function createDeveloperModeContainer() {
     settings.append(createUIForMeasurePrepare());
     settings.append(createUIForDomainPerIteration());
     settings.append(createUIForForceGC());
+    settings.append(createUIForLeakyIframes());
 
     content.append(settings);
 
@@ -55,6 +56,23 @@ function createUIForMeasurementMethod() {
 
     let label = document.createElement("label");
     label.append(check, " ", span("rAF timing"));
+
+    return label;
+}
+
+function createUIForLeakyIframes() {
+    let check = document.createElement("input");
+    check.type = "checkbox";
+    check.id = "leaky-iframes-checkbox";
+    check.checked = !!params.leakyIframes;
+
+    check.onchange = () => {
+        params.leakyIframes = check.checked;
+        updateURL();
+    };
+
+    let label = document.createElement("label");
+    label.append(check, " ", span("Leak IFrames"));
 
     return label;
 }
@@ -326,7 +344,7 @@ function updateURL() {
     else
         url.searchParams.delete("measurementMethod");
 
-    const boolParamKeys = ["iterationCount", "useWarmupSuite", "warmupBeforeSync", "waitBeforeSync", "domainPerIteration", "suiteForceGC"];
+    const boolParamKeys = ["iterationCount", "useWarmupSuite", "warmupBeforeSync", "waitBeforeSync", "domainPerIteration", "suiteForceGC", "leakyIframes"];
     for (const paramKey of boolParamKeys) {
         if (params[paramKey] !== defaultParams[paramKey])
             url.searchParams.set(paramKey, params[paramKey]);
