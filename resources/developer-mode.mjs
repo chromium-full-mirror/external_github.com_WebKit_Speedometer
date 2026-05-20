@@ -21,7 +21,9 @@ export function createDeveloperModeContainer() {
     settings.append(createUIForMeasurementMethod());
     settings.append(createUIForWarmupSuite());
     settings.append(createUIForWarmupBeforeSync());
+    settings.append(createUIForWaitAfterSetup());
     settings.append(createUIForSyncStepDelay());
+    settings.append(createUIForWaitAfterSuite());
     settings.append(createUIForLeakyIframes());
     settings.append(createUIForMeasurePrepare());
     settings.append(createUIForDomainPerIteration());
@@ -167,6 +169,24 @@ function createUIForSyncStepDelay() {
     const { range, label } = createTimeRangeUI("Sync step delay: ", params.waitBeforeSync);
     range.onchange = () => {
         params.waitBeforeSync = parseInt(range.value);
+        updateURL();
+    };
+    return label;
+}
+
+function createUIForWaitAfterSetup() {
+    const { range, label } = createTimeRangeUI("Post setup delay: ", params.waitAfterSetup);
+    range.onchange = () => {
+        params.waitAfterSetup = parseInt(range.value);
+        updateURL();
+    };
+    return label;
+}
+
+function createUIForWaitAfterSuite() {
+    const { range, label } = createTimeRangeUI("Post suite delay: ", params.waitAfterSuite);
+    range.onchange = () => {
+        params.waitAfterSuite = parseInt(range.value);
         updateURL();
     };
     return label;
@@ -344,7 +364,7 @@ function updateURL() {
     else
         url.searchParams.delete("measurementMethod");
 
-    const boolParamKeys = ["iterationCount", "useWarmupSuite", "warmupBeforeSync", "waitBeforeSync", "domainPerIteration", "suiteForceGC", "leakyIframes"];
+    const boolParamKeys = ["iterationCount", "useWarmupSuite", "warmupBeforeSync", "waitAfterSetup", "waitBeforeSync", "waitAfterSuite", "domainPerIteration", "suiteForceGC", "leakyIframes"];
     for (const paramKey of boolParamKeys) {
         if (params[paramKey] !== defaultParams[paramKey])
             url.searchParams.set(paramKey, params[paramKey]);

@@ -559,10 +559,18 @@ export class BenchmarkRunner {
             this._recordPrepareMetric(suite, prepareTime);
         }
 
+        if (params.waitAfterSetup > 0) {
+            await new Promise((resolve) => setTimeout(resolve, params.waitAfterSetup));
+        }
+
         this.markStart(suiteLabel, suiteStartLabel);
         for (const test of suite.tests)
             await this._runTestAndRecordResults(suite, test);
         this.markEnd(suiteLabel, suiteStartLabel, suiteEndLabel);
+
+        if (params.waitAfterSuite > 0) {
+            await new Promise((resolve) => setTimeout(resolve, params.waitAfterSuite));
+        }
     }
 
     _prepareMetrics(suite) {

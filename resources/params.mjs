@@ -16,8 +16,12 @@ export class Params {
     // "timer": The classic (as in Speedometer 2.x) way using setTimeout
     // "raf":   Using rAF callbacks, both for triggering the sync part and for measuring async time.
     measurementMethod = "raf"; // or "timer"
+    // Wait time after suite preparation in ms.
+    waitAfterSetup = 0;
     // Wait time before the sync step in ms.
     waitBeforeSync = 0;
+    // Wait after running a suite.
+    waitAfterSuite = 0;
     // Warmup time before the sync step in ms.
     warmupBeforeSync = 0;
     // Seed for shuffling the execution order of suites.
@@ -116,11 +120,25 @@ export class Params {
             searchParams.delete("useWarmupSuite");
         }
 
+        if (searchParams.has("waitAfterSetup")) {
+            this.waitAfterSetup = this._parseInt(searchParams.get("waitAfterSetup"), "waitAfterSetup");
+            if (this.waitAfterSetup < 0)
+                throw new Error(`Invalid waitAfterSetup param: '${this.waitAfterSetup}', must be >= 0.`);
+            searchParams.delete("waitAfterSetup");
+        }
+
         if (searchParams.has("waitBeforeSync")) {
             this.waitBeforeSync = this._parseInt(searchParams.get("waitBeforeSync"), "waitBeforeSync");
             if (this.waitBeforeSync < 0)
                 throw new Error(`Invalid waitBeforeSync param: '${this.waitBeforeSync}', must be >= 0.`);
             searchParams.delete("waitBeforeSync");
+        }
+
+        if (searchParams.has("waitAfterSuite")) {
+            this.waitAfterSuite = this._parseInt(searchParams.get("waitAfterSuite"), "waitAfterSuite");
+            if (this.waitAfterSuite < 0)
+                throw new Error(`Invalid waitAfterSuite param: '${this.waitAfterSuite}', must be >= 0.`);
+            searchParams.delete("waitAfterSuite");
         }
 
         if (searchParams.has("warmupBeforeSync")) {
